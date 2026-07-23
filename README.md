@@ -16,7 +16,7 @@ Use the sliders in the Palette to explore your font’s axes. The interpolated r
 
 ## Preview
 
-![Screenshot of this plugin](./.github/screenshot-1.png)
+![A GIF of the demo of this plugin](./.github/preview.gif)
 
 ## Requirements
 
