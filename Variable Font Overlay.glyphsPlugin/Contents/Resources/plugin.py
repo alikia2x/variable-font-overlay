@@ -8,6 +8,7 @@ import traceback
 from AppKit import (
 	NSButton,
 	NSButtonTypeSwitch,
+	NSBezierPath,
 	NSColor,
 	NSColorWell,
 	NSControlSizeSmall,
@@ -35,6 +36,16 @@ from GlyphsApp.plugins import PalettePlugin, ReporterPlugin
 _REPORTER = None
 _OPACITY_DEFAULT_KEY = "com.alikia.VariableFontOverlay.opacity"
 _COLOR_DEFAULT_KEY = "com.alikia.VariableFontOverlay.color"
+_FONT_STATE_ATTRIBUTES = (
+	"_font_signature",
+	"_axes",
+	"_axis_bounds",
+	"_axis_steps",
+	"_axis_values",
+	"_instance",
+	"_proxy",
+	"_interpolated_font",
+)
 
 
 def _localized(english, chinese):
@@ -94,6 +105,8 @@ class VariableFontOverlayPreview(ReporterPlugin):
 		self._axis_values = []
 		self._instance = None
 		self._proxy = None
+		self._interpolated_font = None
+		self._font_states = {}
 		self._opacity = self._load_opacity()
 		self._overlay_color = self._load_color()
 		self._last_error = None
@@ -140,6 +153,8 @@ class VariableFontOverlayPreview(ReporterPlugin):
 	def willDeactivate(self):
 		self._active = False
 		self._proxy = None
+		self._interpolated_font = None
+		self._store_current_font_state()
 		try:
 			objc.super(VariableFontOverlayPreview, self).willDeactivate()
 		except Exception:
@@ -157,7 +172,7 @@ class VariableFontOverlayPreview(ReporterPlugin):
 	@objc.python_method
 	def _draw_interpolation(self, source_layer):
 		try:
-			font = Glyphs.font
+			font = self._font_for_layer(source_layer)
 			if font is None or source_layer is None or source_layer.parent is None:
 				return
 			if self._font_changed(font):
@@ -170,11 +185,19 @@ class VariableFontOverlayPreview(ReporterPlugin):
 				return
 
 			self._overlay_color.colorWithAlphaComponent_(self._opacity).set()
-			closed_path = preview_layer.completeBezierPath
+			closed_path = self._drawing_path(
+				preview_layer,
+				"drawBezierPath",
+				"bezierPath",
+			)
 			if closed_path is not None and not closed_path.isEmpty():
 				closed_path.fill()
 
-			open_path = preview_layer.completeOpenBezierPath
+			open_path = self._drawing_path(
+				preview_layer,
+				"drawOpenBezierPath",
+				"openBezierPath",
+			)
 			if open_path is not None and not open_path.isEmpty():
 				scale = max(float(self.getScale()), 0.001)
 				open_path.setLineWidth_(max(0.5, 1.25 / scale))
@@ -185,6 +208,15 @@ class VariableFontOverlayPreview(ReporterPlugin):
 
 	@objc.python_method
 	def _interpolated_layer(self, glyph_name):
+		proxy_layer = self._proxy_layer(glyph_name)
+		if proxy_layer is None:
+			return None
+		if self._layer_has_components(proxy_layer):
+			return self._component_safe_interpolated_layer(glyph_name)
+		return proxy_layer
+
+	@objc.python_method
+	def _proxy_layer(self, glyph_name):
 		if self._proxy is None:
 			self._proxy = self._instance.interpolatedFontProxy
 		if self._proxy is None:
@@ -201,6 +233,111 @@ class VariableFontOverlayPreview(ReporterPlugin):
 			except Exception:
 				master_id = self._proxy.masters[0].id
 		return glyph.layers[master_id]
+
+	@objc.python_method
+	def _layer_has_components(self, layer):
+		try:
+			return len(layer.components) > 0
+		except Exception:
+			return False
+
+	@objc.python_method
+	def _component_safe_interpolated_layer(self, glyph_name):
+		"""Use a full interpolation for component glyphs.
+
+		The proxy can leave component references unresolved at synthetic
+		designspace locations, which makes Glyphs draw an Empty Base Glyph
+		placeholder. A full interpolated font resolves valid component
+		references; drawing later merges their actual paths without asking
+		Glyphs to synthesize placeholders for unresolved ones.
+		"""
+		if self._interpolated_font is None:
+			try:
+				self._interpolated_font = self._instance.interpolatedFont
+			except Exception:
+				self._interpolated_font = (
+					self._instance.pyobjc_instanceMethods.interpolatedFont()
+				)
+		if self._interpolated_font is None:
+			return None
+
+		glyph = self._interpolated_font.glyphs[glyph_name]
+		if glyph is None:
+			return None
+		try:
+			layer = glyph.layers[0]
+		except Exception:
+			layers = list(glyph.layers)
+			layer = layers[0] if layers else None
+		if layer is None:
+			return None
+		return layer
+
+	@objc.python_method
+	def _drawing_path(self, layer, drawing_attribute, fallback_attribute):
+		if self._layer_has_components(layer):
+			# Do not ask GSLayer.drawBezierPath to resolve components here.
+			# Glyphs renders an "Empty Base Glyph" placeholder when one of
+			# those references is empty. Component paths, on the other hand,
+			# contain only geometry that could actually be resolved and are
+			# already transformed into the parent layer's coordinates.
+			result = NSBezierPath.bezierPath()
+			owners = [layer]
+			try:
+				owners.extend(list(layer.components))
+			except Exception:
+				pass
+			for owner in owners:
+				try:
+					path = getattr(owner, fallback_attribute)
+					path = path() if callable(path) else path
+					if path is not None and not path.isEmpty():
+						result.appendBezierPath_(path)
+				except Exception:
+					continue
+			return result
+
+		try:
+			path = getattr(layer, drawing_attribute)
+			return path() if callable(path) else path
+		except Exception:
+			pass
+		try:
+			return getattr(layer, fallback_attribute)
+		except Exception:
+			return None
+
+	@objc.python_method
+	def _font_for_layer(self, layer):
+		try:
+			glyph = layer.parent
+			font = glyph.parent
+			return font() if callable(font) else font
+		except Exception:
+			return Glyphs.font
+
+	@objc.python_method
+	def _store_current_font_state(self):
+		if self._font is None:
+			return
+		state = {"font": self._font}
+		for attribute in _FONT_STATE_ATTRIBUTES:
+			state[attribute] = getattr(self, attribute)
+		self._font_states[id(self._font)] = state
+
+	@objc.python_method
+	def _restore_font_state(self, font, signature):
+		state = self._font_states.get(id(font))
+		if (
+			state is None
+			or state.get("font") is not font
+			or state.get("_font_signature") != signature
+		):
+			return False
+		self._font = font
+		for attribute in _FONT_STATE_ATTRIBUTES:
+			setattr(self, attribute, state[attribute])
+		return True
 
 	@objc.python_method
 	def _font_changed(self, font):
@@ -224,6 +361,14 @@ class VariableFontOverlayPreview(ReporterPlugin):
 
 	@objc.python_method
 	def _sync_font(self, font):
+		if self._font is not None and self._font is not font:
+			self._store_current_font_state()
+
+		if font is not None:
+			signature = self._signature_for_font(font)
+			if self._restore_font_state(font, signature):
+				return
+
 		self._font = font
 		self._proxy = None
 		self._instance = None
@@ -232,6 +377,7 @@ class VariableFontOverlayPreview(ReporterPlugin):
 		self._axis_steps = []
 		self._axis_values = []
 		self._font_signature = None
+		self._interpolated_font = None
 
 		if font is None:
 			return
@@ -269,6 +415,7 @@ class VariableFontOverlayPreview(ReporterPlugin):
 			self._instance = GSInstance()
 			self._instance.font = font
 			self._apply_axis_values()
+		self._store_current_font_state()
 
 	@objc.python_method
 	def _smart_step(self, axis, minimum, maximum):
@@ -363,9 +510,13 @@ class VariableFontOverlayPreview(ReporterPlugin):
 			except Exception:
 				self._instance.internalAxesValues[index] = value
 		self._proxy = None
+		self._interpolated_font = None
+		self._store_current_font_state()
 
 	@objc.python_method
 	def _set_axis_value(self, index, value):
+		if index < 0 or index >= len(self._axis_bounds):
+			return None
 		value = self._quantized_axis_value(index, value)
 		self._axis_values[index] = value
 		self._apply_axis_values()
@@ -373,7 +524,10 @@ class VariableFontOverlayPreview(ReporterPlugin):
 		return value
 
 	def resetAxes_(self, sender):
-		font = Glyphs.font
+		self._reset_axes_for_font(Glyphs.font)
+
+	@objc.python_method
+	def _reset_axes_for_font(self, font):
 		if font is None:
 			return
 		if self._font_changed(font):
@@ -543,9 +697,8 @@ class VariableFontOverlayPalette(PalettePlugin):
 			font = self._font_for_palette()
 			if reporter is None:
 				return
-			if font is not None and font == Glyphs.font:
-				if reporter._font_changed(font):
-					reporter._sync_font(font)
+			if font is not None and reporter._font_changed(font):
+				reporter._sync_font(font)
 
 			if (
 				font != self._ui_font
@@ -571,6 +724,16 @@ class VariableFontOverlayPalette(PalettePlugin):
 			return font() if callable(font) else font
 		except Exception:
 			return Glyphs.font
+
+	@objc.python_method
+	def _reporter_for_palette(self):
+		reporter = _reporter_instance()
+		if reporter is None:
+			return None
+		font = self._font_for_palette()
+		if font is not None and reporter._font_changed(font):
+			reporter._sync_font(font)
+		return reporter
 
 	@objc.python_method
 	def _rebuild_axis_controls(self, reporter):
@@ -723,27 +886,40 @@ class VariableFontOverlayPalette(PalettePlugin):
 			Glyphs.deactivateReporter(reporter)
 
 	def axisChanged_(self, sender):
-		reporter = _reporter_instance()
+		reporter = self._reporter_for_palette()
 		if reporter is None:
 			return
 		index = int(sender.tag())
 		value = reporter._set_axis_value(index, sender.doubleValue())
+		if value is None:
+			self.update(None)
+			return
 		sender.setDoubleValue_(value)
-		self._axis_fields[index].setStringValue_(
-			reporter._format_axis_value(index, value)
-		)
+		field = self._axis_fields.get(index)
+		if field is not None:
+			field.setStringValue_(
+				reporter._format_axis_value(index, value)
+			)
 
 	def axisFieldChanged_(self, sender):
-		reporter = _reporter_instance()
+		reporter = self._reporter_for_palette()
 		if reporter is None:
 			return
 		index = int(sender.tag())
+		if index < 0 or index >= len(reporter._axis_values):
+			self.update(None)
+			return
 		try:
 			value = float(sender.stringValue())
 		except (TypeError, ValueError):
 			value = reporter._axis_values[index]
 		value = reporter._set_axis_value(index, value)
-		self._axis_sliders[index].setDoubleValue_(value)
+		if value is None:
+			self.update(None)
+			return
+		slider = self._axis_sliders.get(index)
+		if slider is not None:
+			slider.setDoubleValue_(value)
 		sender.setStringValue_(reporter._format_axis_value(index, value))
 
 	def opacityChanged_(self, sender):
@@ -774,10 +950,10 @@ class VariableFontOverlayPalette(PalettePlugin):
 		Glyphs.redraw()
 
 	def resetAxes_(self, sender):
-		reporter = _reporter_instance()
+		reporter = self._reporter_for_palette()
 		if reporter is None:
 			return
-		reporter.resetAxes_(sender)
+		reporter._reset_axes_for_font(self._font_for_palette())
 		self._sync_controls(reporter)
 
 	@objc.python_method
