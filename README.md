@@ -14,6 +14,10 @@ Use the sliders in the Palette to explore your font’s axes. The interpolated r
 - Reset every axis to the current master with one click.
 - Toggle the overlay from the Palette, the View menu, or a keyboard shortcut.
 
+## Preview
+
+![Screenshot of this plugin](./.github/screenshot-1.png)
+
 ## Requirements
 
 - Glyphs 3.2 or later
