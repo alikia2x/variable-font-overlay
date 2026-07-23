@@ -14,8 +14,6 @@ Use the sliders in the Palette to explore your font’s axes. The interpolated r
 - Reset every axis to the current master with one click.
 - Toggle the overlay from the Palette, the View menu, or a keyboard shortcut.
 
-The plugin chooses practical increments for common axes. Weight, width, optical size, italic, and grade use whole-number steps; slant uses tenths. Custom axes receive an increment appropriate for their range.
-
 ## Requirements
 
 - Glyphs 3.2 or later
@@ -27,8 +25,6 @@ The plugin chooses practical increments for common axes. Weight, width, optical 
 2. Unzip the download.
 3. Double-click `Variable Font Overlay.glyphsPlugin` and confirm the installation in Glyphs.
 4. Restart Glyphs.
-
-When upgrading from an older version named **Variable Font Overlay Preview**, remove the old plugin before installing the new one. You can manage installed plugins in `Window → Plugin Manager`.
 
 ## Usage
 
@@ -65,14 +61,6 @@ Make sure the current font has axes configured in `File → Font Info → Font �
 ### The plugin does not appear after installation
 
 Restart Glyphs completely. If macOS blocks the plugin, right-click it in Finder, choose **Open**, and confirm the prompt.
-
-### An older installation conflicts with this version
-
-Quit Glyphs and remove any old `Variable Font Overlay Preview.glyphsReporter` or `Variable Font Overlay Preview.glyphsPlugin` from:
-
-`~/Library/Application Support/Glyphs 3/Plugins/`
-
-Then install the current plugin and restart Glyphs.
 
 ## License
 
