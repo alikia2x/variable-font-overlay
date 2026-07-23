@@ -659,8 +659,8 @@ class VariableFontOverlayPalette(PalettePlugin):
 		self._opacity_slider = NSSlider.alloc().initWithFrame_(
 			NSMakeRect(56, 46, width - 115, 20)
 		)
-		self._opacity_slider.setMinValue_(0.05)
-		self._opacity_slider.setMaxValue_(0.85)
+		self._opacity_slider.setMinValue_(0.0)
+		self._opacity_slider.setMaxValue_(1)
 		self._opacity_slider.setControlSize_(NSControlSizeSmall)
 		self._opacity_slider.setContinuous_(True)
 		self._opacity_slider.setTarget_(self)
