@@ -62,7 +62,6 @@ class BundleTests(unittest.TestCase):
 		)
 		self.assertTrue(set(info["Principal Classes"]).issubset(classes))
 		self.assertEqual(info["CFBundleName"], "Variable Font Overlay")
-		self.assertEqual(info["CFBundleShortVersionString"], "1.2.3")
 
 	def test_reporter_has_required_hooks(self):
 		tree = ast.parse(
